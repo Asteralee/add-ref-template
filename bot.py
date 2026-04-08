@@ -6,10 +6,10 @@ import os
 import random
 
 API_URL = "https://test.wikipedia.org/w/api.php"
-TARGET_SECTION = "Pages to fix"
+TARGET_SECTION = "Reference list missing"
 DELAY = 3.0
-USER_AGENT = "ReflistBot/3.0 (https://simple.wikipedia.org/wiki/User:YourBotName)"
-WORKLIST_PAGE = "User:YourBot/Worklist" 
+USER_AGENT = "ReflistBot/3.0 (https://simple.wikipedia.org/wiki/User:AsteraBot)"
+WORKLIST_PAGE = "User:AsteraBot/Pages to fix" 
 USERNAME = os.environ["BOT_USER"]
 PASSWORD = os.environ["BOT_PASS"]
 
