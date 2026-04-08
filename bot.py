@@ -10,8 +10,8 @@ TARGET_SECTION = "Pages to fix"
 DELAY = 3.0
 USER_AGENT = "ReflistBot/3.0 (https://simple.wikipedia.org/wiki/User:YourBotName)"
 WORKLIST_PAGE = "User:YourBot/Worklist" 
-USERNAME = os.environ["BOT_USERNAME"]
-PASSWORD = os.environ["BOT_PASSWORD"]
+USERNAME = os.environ["BOT_USER"]
+PASSWORD = os.environ["BOT_PASS"]
 
 session = requests.Session()
 session.headers.update({"User-Agent": USER_AGENT})
