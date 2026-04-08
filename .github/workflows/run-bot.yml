@@ -1,0 +1,28 @@
+name: Run Reflist Bot
+
+on:
+  workflow_dispatch: 
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install requests
+
+      - name: Run bot script
+        env:
+          BOT_USER: ${{ secrets.BOT_USER }}
+          BOT_PASS: ${{ secrets.BOT_PASS }}
+        run: |
+          python bot.py
