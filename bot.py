@@ -9,7 +9,7 @@ import difflib
 API_URL = "https://test.wikipedia.org/w/api.php"
 TARGET_SECTION = "Reference list missing"
 DELAY = 3.0
-MAX_PAGES = 10
+MAX_PAGES = 3
 USER_AGENT = "ReflistBot/3.0 (https://simple.wikipedia.org/wiki/User:AsteraBot)"
 WORKLIST_PAGE = "User:AsteraBot/Pages to fix"
 USERNAME = os.environ["BOT_USER"]
