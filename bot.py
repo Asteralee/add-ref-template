@@ -4,12 +4,14 @@ import time
 from datetime import datetime
 import os
 import random
+import difflib
 
 API_URL = "https://test.wikipedia.org/w/api.php"
 TARGET_SECTION = "Reference list missing"
 DELAY = 3.0
+MAX_PAGES = 10
 USER_AGENT = "ReflistBot/3.0 (https://simple.wikipedia.org/wiki/User:AsteraBot)"
-WORKLIST_PAGE = "User:AsteraBot/Pages to fix" 
+WORKLIST_PAGE = "User:AsteraBot/Pages to fix"
 USERNAME = os.environ["BOT_USER"]
 PASSWORD = os.environ["BOT_PASS"]
 
@@ -40,8 +42,6 @@ def login():
         "type": "login",
         "format": "json"
     })
-    if not data:
-        raise Exception("Failed to fetch login token")
     token = data["query"]["tokens"]["logintoken"]
 
     result = api_request("POST", data={
@@ -51,8 +51,10 @@ def login():
         "lgtoken": token,
         "format": "json"
     })
+
     if result["login"]["result"] != "Success":
         raise Exception("Login failed")
+
 
 def get_page(title):
     data = api_request("GET", {
@@ -63,10 +65,9 @@ def get_page(title):
         "titles": title,
         "format": "json"
     })
-    if not data:
-        return None
     page = next(iter(data["query"]["pages"].values()))
     return page.get("revisions", [{}])[0].get("slots", {}).get("main", {}).get("*", "")
+
 
 def edit_page(title, text, summary):
     data = api_request("GET", {
@@ -74,9 +75,8 @@ def edit_page(title, text, summary):
         "meta": "tokens",
         "format": "json"
     })
-    if not data:
-        return None
     token = data["query"]["tokens"]["csrftoken"]
+
     return api_request("POST", data={
         "action": "edit",
         "title": title,
@@ -88,6 +88,7 @@ def edit_page(title, text, summary):
         "format": "json"
     })
 
+
 def extract_section(text):
     pattern = re.compile(
         rf"^==+\s*{re.escape(TARGET_SECTION)}\s*==+\s*$\n(.*?)(?=\n==+|\Z)",
@@ -95,6 +96,7 @@ def extract_section(text):
     )
     match = pattern.search(text)
     return match.group(1) if match else ""
+
 
 def extract_pages(section_text):
     pages = []
@@ -105,58 +107,133 @@ def extract_pages(section_text):
                 pages.append(m.group(1))
     return pages
 
+
 def mark_done(text, title):
     today = datetime.utcnow().strftime("%d %B %Y")
     pattern = re.compile(rf"\*\s*\[\[{re.escape(title)}\]\].*")
     return pattern.sub(f"* [[{title}]] -- {{{{done}}}} on {today}", text)
 
+
 def update_last_modified(text):
     today = datetime.utcnow().strftime("%d %B %Y")
     if "'''Last modified''':" in text:
         return re.sub(r"'''Last modified''':.*", f"'''Last modified''': {today} UTC", text)
-    else:
-        return f"'''Last modified''': {today} UTC\n\n{text}"
+    return f"'''Last modified''': {today} UTC\n\n{text}"
 
-REF_SECTION_REGEX = re.compile(r"^=+\s*(references?|sources?|citations?)\s*:?\s*=+$", re.IGNORECASE)
-REFLIST_REGEX = re.compile(r"\{\{\s*reflist", re.IGNORECASE)
+
+# 🔍 Detect both <references /> and {{reflist}}
+def has_references_block(text):
+    return (
+        re.search(r"<references\s*/?>", text, re.IGNORECASE) or
+        re.search(r"\{\{\s*reflist", text, re.IGNORECASE)
+    )
+
+
+# 🧠 Fuzzy match reference headings
+def is_reference_heading(title):
+    title = title.lower().strip()
+    valid = ["references", "reference", "sources", "citations"]
+
+    if title in valid:
+        return True
+
+    return bool(difflib.get_close_matches(title, valid, n=1, cutoff=0.75))
+
 
 def fix_reflist(text):
-    if re.search(r"<references\s*/?>", text, re.IGNORECASE):
+    # Skip pages with no <ref>
+    if not re.search(r"<ref", text, re.IGNORECASE):
         return None
 
     lines = text.split("\n")
-    new_lines = []
-    in_ref = False
-    found_section = False
-    found_reflist = False
+    heading_regex = re.compile(r"^(=+)\s*(.*?)\s*\1\s*$")
 
-    for line in lines:
-        if REF_SECTION_REGEX.match(line.strip()):
-            in_ref = True
-            found_section = True
-            found_reflist = False
-            new_lines.append(line)
-            continue
-        if in_ref and line.startswith("="):
-            if not found_reflist:
-                new_lines.append("{{reflist}}")
-            in_ref = False
-        if in_ref and REFLIST_REGEX.search(line):
-            found_reflist = True
-        new_lines.append(line)
+    sections = []
+    current = {"title": None, "start": 0}
 
-    if in_ref and not found_reflist:
-        new_lines.append("{{reflist}}")
-    if not found_section:
-        new_lines.append("\n== References ==\n{{reflist}}")
+    # Parse sections
+    for i, line in enumerate(lines):
+        m = heading_regex.match(line.strip())
+        if m:
+            if current["title"] is not None:
+                current["end"] = i
+                sections.append(current)
 
-    new_text = "\n".join(new_lines)
-    return new_text if new_text != text else None
+            current = {
+                "title": m.group(2).strip(),
+                "start": i
+            }
 
-# Main
+    if current["title"] is not None:
+        current["end"] = len(lines)
+        sections.append(current)
 
+    see_also_idx = None
+    external_idx = None
+    ref_section = None
+
+    for sec in sections:
+        title_norm = sec["title"].lower().strip()
+
+        if title_norm in ["see also", "related pages"]:
+            see_also_idx = sec["end"]
+
+        elif title_norm in ["external links", "other websites"]:
+            external_idx = sec["start"]
+
+        elif is_reference_heading(title_norm):
+            ref_section = sec
+
+    # ✅ CASE 1: Fix existing section
+    if ref_section:
+        start = ref_section["start"]
+        end = ref_section["end"]
+
+        section_lines = lines[start:end]
+
+        # Remove existing reflists/references
+        cleaned = []
+        for line in section_lines[1:]:
+            if has_references_block(line):
+                continue
+            cleaned.append(line)
+
+        # Rebuild section
+        new_section = ["== References ==", "{{reflist}}"]
+        new_section.extend(cleaned)
+
+        lines[start:end] = new_section
+        return "\n".join(lines)
+
+    # ✅ CASE 2: Insert new section
+    if see_also_idx is not None:
+        insert_index = see_also_idx
+    elif external_idx is not None:
+        insert_index = external_idx
+    else:
+        insert_index = len(lines)
+        for i in range(len(lines) - 1, -1, -1):
+            t = lines[i].strip()
+            if (
+                t.startswith("[[Category:") or
+                t.startswith("{{DEFAULTSORT:") or
+                t.startswith("{{")
+            ):
+                insert_index = i
+            elif t == "":
+                continue
+            else:
+                break
+
+    ref_block = ["", "== References ==", "{{reflist}}", ""]
+    new_lines = lines[:insert_index] + ref_block + lines[insert_index:]
+    return "\n".join(new_lines)
+
+
+# 🚀 Main
 def main():
     login()
+
     worklist_text = get_page(WORKLIST_PAGE)
     if not worklist_text:
         print("Failed to fetch worklist page")
@@ -165,8 +242,9 @@ def main():
     section_text = extract_section(worklist_text)
     pages = extract_pages(section_text)
 
-    for title in pages:
+    for title in pages[:MAX_PAGES]:
         print("Processing:", title)
+
         text = get_page(title)
         if not text:
             continue
@@ -175,14 +253,19 @@ def main():
         if not new_text:
             continue
 
-        edit_page(title, new_text, "Bot: Adding {{reflist}}")
+        edit_page(title, new_text, "Bot: Fixing References section")
 
         worklist_text = mark_done(worklist_text, title)
         time.sleep(DELAY + random.random())
 
-    edit_page(WORKLIST_PAGE, update_last_modified(worklist_text),
-              "Bot: Marked pages as done on worklist")
+    edit_page(
+        WORKLIST_PAGE,
+        update_last_modified(worklist_text),
+        "Bot: Updated worklist"
+    )
+
     print("Done.")
+
 
 if __name__ == "__main__":
     main()
